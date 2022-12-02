@@ -221,12 +221,12 @@ class PressurizedFlow:
         Defines the Energy or Extended Bernoulli Equation used for pressurized calculations.
         
         The energy equation is given by:
-        p1 + Q1^2/(2*g*A^2) + z1 = p2 + Q2^2/(2*g*A^2) + z2 + hf_12(Q) + hm_12(Q)
+        p1/(rho*g) + Q1^2/(2*g*A^2) + z1 = p2/(rho*g) + Q2^2/(2*g*A^2) + z2 + hf_12(Q) + hm_12(Q)
         
         On rearrangement:
-        p2 - p1 + z2 - z1 + Q2^2/(2*g*A^2) - Q1^2/(2*g*A^2) + hf_12(Q) + hm_12(Q) = 0
+        p2/(rho*g) - p1/(rho*g) + z2 - z1 + Q2^2/(2*g*A^2) - Q1^2/(2*g*A^2) + hf_12(Q) + hm_12(Q) = 0
         
-        Assuming p2 = p1 = patm, V1 = Q1 = 0:
+        Assuming p1 = p2 = patm, V1 = Q1 = 0:
         z2 - z1 + Q2^2/(2*g*A^2) + hf_12(Q) + hm_12(Q) = 0 
         
         where, 
@@ -611,10 +611,11 @@ class Section:
         """
         if self.rating_press is not None:
             sum_terms = (sec.z2 - 
-                        sec.rating_press.elev + 
-                        sec.rating_press.hf + 
-                        sec.rating_press.hm + 
-                        sec.rating_press.Q**2/(2*32.2*sec.area**2))
+                         sec.rating_press.elev + 
+                         sec.rating_press.hf + 
+                         sec.rating_press.hm + 
+                         sec.rating_press.Q**2/(2*32.2*sec.area**2)
+                        )
             satisfies = np.isclose(all(sum_terms),0)
             print("Satisfies equation?: ", satisfies)
             if plot:
@@ -662,17 +663,17 @@ class SectionComposite:
         Defines the Energy or Extended Bernoulli Equation used for pressurized calculations.
         
         The energy equation is given by:
-        p1 + Q1^2/(2*g*A^2) + z1 = p2 + Q2^2/(2*g*A^2) + z2 + hf_12(Q) + hm_12(Q)
+        p1/(rho*g) + Q1^2/(2*g*A^2) + z1 = p2/(rho*g) + Q2^2/(2*g*A^2) + z2 + hf_12(Q) + hm_12(Q)
         
         On rearrangement:
-        p2 - p1 + z2 - z1 + Q2^2/(2*g*A^2) - Q1^2/(2*g*A^2) + hf_12(Q) + hm_12(Q) = 0
+        p2/(rho*g) - p1/(rho*g) + z2 - z1 + Q2^2/(2*g*A^2) - Q1^2/(2*g*A^2) + hf_12(Q) + hm_12(Q) = 0
         
-        Assuming p2 = p1 = patm, V1 = Q1 = 0:
+        Assuming p1 = p2 = patm, V1 = Q1 = 0:
         z2 - z1 + Q2^2/(2*g*A^2) + hf_12(Q) + hm_12(Q) = 0
         where, 
             Section 1 is upstream. Section 2 is downstream. 
             hf_12(Q) and hm_12(Q) are the friction and minor losses, respectively.
-        
+            
         For a composite system made of several sections:
         z_out - z_in + Q2^2/(2*g*A_out^2) + SUM|hf_12(Q) + SUM|hm_12(Q) = 0
         where, 
@@ -757,9 +758,9 @@ class SectionComposite:
         """
         Generates the unpressurized (open channel) rating curve.
         Parameters:
-        Hmax -
-        N -
-        verbose - 
+        Hmax - Max height to calculate open channel flow up to [ft] (default diam).
+        N - Number of calculation points.
+        verbose - boolean flag for displaying when points are pressurized.
         """
         if not Hmax:
             sec1 = self.sections[0]
@@ -767,8 +768,8 @@ class SectionComposite:
             
         heights = np.linspace(0.001, Hmax)
         Q_arr = np.zeros(len(heights))
-        y_mat = np.zeros((len(heights), len(sections)))
-        Fr_mat = np.zeros((len(heights), len(sections)))
+        y_mat = np.zeros((len(heights), len(self.sections)))
+        Fr_mat = np.zeros((len(heights), len(self.sections)))
         
         # For each headwater height.
         for i, h in enumerate(heights):
@@ -797,7 +798,7 @@ class SectionComposite:
         #  Horizontally concat into 1 matrix.
         data = np.concatenate((heights, Q_arr, y_mat, Fr_mat), axis=1)
         #  Column names
-        indices = range(1, len(sections)+1)
+        indices = range(1, len(self.sections)+1)
         columns = ['headwater', 'Q'] 
         for name in ['y_', 'Fr_']:
             columns += [f"{name}{i}" for i in indices]
@@ -822,21 +823,23 @@ class SectionComposite:
         else:
             return False
         
-    def rating_combined(self):
+    def rating_combined(self, N=1000):
         """
         Returns the combined rating curve.
+        Parameters:
+        N - number of interpolation points
         """
         if (self.rating_open is None) or (self.rating_press is None):
             print("Pressurized and and Unpressurized rating curves must be generated first.")
             return
         
         # Truncate headwater unpressurized curve where any downstream section becomes pressurized.
-        mask = self.rating_open['Q'] < self.pressurized_at(verbose=False)
+        mask = self.rating_open['Q'] <= self.pressurized_at(verbose=False)
         x = pd.concat((self.rating_open['Q'][mask], self.rating_press['Q']))
-        y = pd.concat((self.rating_open['headwater'][mask], sections[0].diam + self.rating_press['heights']))
+        y = pd.concat((self.rating_open['headwater'][mask], self.sections[0].diam + self.rating_press['heights']))
 
         # Linearly interpolate between pressurized and unpressurized flow.
-        xnew = np.linspace(x.min(), x.max(), 1000)
+        xnew = np.linspace(x.min(), x.max(), N)
         ynew = np.interp(xnew, x, y)
         
         self.rating_comb = pd.DataFrame(data={'height': ynew, 'Q': xnew})
@@ -851,7 +854,8 @@ class SectionComposite:
                          (self.sections[0].z1 + system.rating_press.heights) +
                          self.rating_press.hV +
                          self.rating_press.hf_sum +
-                         self.rating_press.hm_sum)
+                         self.rating_press.hm_sum
+                        )
             satisfies = np.isclose(all(sum_terms),0)
             print("Satisfies equation?: ", satisfies)
             if plot:
